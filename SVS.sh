@@ -56,35 +56,43 @@ start_tor() {
     if [ "$OS" == "linux" ] || [ "$OS" == "macos" ]; then
         TORRC="/etc/tor/torrc"
         [ "$OS" == "macos" ] && TORRC="/usr/local/etc/tor/torrc"
-        # Asegurarse de que el puerto de control esté configurado
-        grep -q "ControlPort 9051" $TORRC || echo "ControlPort 9051" | tee -a $TORRC
-        grep -q "CookieAuthentication 0" $TORRC || echo "CookieAuthentication 0" | tee -a $TORRC
-        # Reiniciar TOR
-        service tor restart || (pkill tor && tor &)
-        sleep 5
+        grep -q "^ControlPort 9051" $TORRC || echo "ControlPort 9051" | tee -a $TORRC
+        grep -q "^CookieAuthentication 0" $TORRC || echo "CookieAuthentication 0" | tee -a $TORRC
+        service tor stop 2>/dev/null || pkill tor
+        sleep 2
+        service tor start || tor -f $TORRC &
+        sleep 10
         if ! ps aux | grep -v grep | grep tor >/dev/null; then
             echo "Error: TOR no se inició correctamente."
             exit 1
         fi
-        # Verificar puerto de control
         if ! nc -z 127.0.0.1 9051; then
             echo "Error: Puerto de control 9051 no está abierto."
             exit 1
         fi
         echo "TOR iniciado."
+        INITIAL_IP=$(proxychains4 curl -s icanhazip.com 2>/dev/null || echo "No se pudo obtener IP inicial")
+        echo "IP inicial a través de TOR: $INITIAL_IP"
+        echo "$(date): TOR iniciado - IP inicial: $INITIAL_IP" >> $LOG_FILE
     fi
-    echo "$(date): TOR iniciado" >> $LOG_FILE
 }
 
 # Rotar identidad TOR
 rotate_tor() {
     echo "Rotando identidad TOR..."
+    OLD_IP=$(proxychains4 curl -s icanhazip.com 2>/dev/null || echo "No se pudo obtener IP previa")
+    echo "IP antes de rotar: $OLD_IP"
     if printf "AUTHENTICATE\r\nSIGNAL NEWNYM\r\nQUIT\r\n" | nc 127.0.0.1 9051 >/dev/null 2>&1; then
         sleep 5
         echo "Nueva identidad TOR establecida."
         CURRENT_IP=$(proxychains4 curl -s icanhazip.com 2>/dev/null || echo "No se pudo obtener IP")
-        echo "IP actual: $CURRENT_IP"
-        echo "$(date): Identidad TOR rotada - Nueva IP: $CURRENT_IP" >> $LOG_FILE
+        echo "IP después de rotar: $CURRENT_IP"
+        if [ "$OLD_IP" != "$CURRENT_IP" ] && [ ! -z "$CURRENT_IP" ]; then
+            echo "Cambio de IP exitoso."
+        else
+            echo "Advertencia: La IP no cambió o no se pudo obtener."
+        fi
+        echo "$(date): Identidad TOR rotada - IP previa: $OLD_IP - Nueva IP: $CURRENT_IP" >> $LOG_FILE
     else
         echo "Error: No se pudo rotar la identidad de TOR."
         echo "$(date): Error al rotar identidad TOR" >> $LOG_FILE
@@ -160,6 +168,11 @@ detect_os
 # Configurar todo
 start_tor
 setup_proxychains
+setup_anonymous_dns
+main_loop &
+
+echo "Script ejecutándose. Log en $LOG_FILE. Usa Ctrl+C para detener."
+wait
 setup_anonymous_dns
 main_loop &
 
