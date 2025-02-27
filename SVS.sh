@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Script mejorado para anonimato en auditorías de Red Team con monitoreo
+# Script mejorado para anonimato con cambio de IP verificable
 # Uso: sudo ./script.sh [interfaz]
 
 # Verificar root
@@ -36,42 +36,44 @@ detect_os() {
 # Instalar dependencias
 install_deps() {
     if [ "$OS" == "linux" ]; then
-        echo "Instalando dependencias en Linux..."
-        apt-get update && apt-get install -y tor macchanger proxychains-ng
+        apt-get update && apt-get install -y tor macchanger proxychains-ng curl
     elif [ "$OS" == "macos" ]; then
-        echo "Instalando dependencias en macOS..."
-        brew install tor macchanger proxychains-ng
+        brew install tor macchanger proxychains-ng curl
     fi
 }
 
-# Configurar TOR
+# Configurar TOR con puerto de control
 start_tor() {
-    echo "Iniciando TOR..."
+    echo "Iniciando TOR con puerto de control..."
     if [ "$OS" == "linux" ] || [ "$OS" == "macos" ]; then
-        service tor start || tor &
+        # Modificar torrc para habilitar puerto de control
+        TORRC="/etc/tor/torrc"
+        [ "$OS" == "macos" ] && TORRC="/usr/local/etc/tor/torrc"
+        echo "ControlPort 9051" >> $TORRC
+        echo "CookieAuthentication 0" >> $TORRC
+        service tor restart || tor &
         sleep 5
         echo "TOR iniciado."
     fi
     echo "$(date): TOR iniciado" >> $LOG_FILE
 }
 
-# Rotar identidad TOR
+# Rotar identidad TOR usando puerto de control
 rotate_tor() {
     echo "Rotando identidad TOR..."
-    killall -HUP tor
-    sleep 2
+    printf "AUTHENTICATE\r\nSIGNAL NEWNYM\r\nQUIT\r\n" | nc 127.0.0.1 9051
+    sleep 5 # Esperar a que el nuevo circuito se establezca
     echo "Nueva identidad TOR establecida."
-    echo "$(date): Identidad TOR rotada" >> $LOG_FILE
+    CURRENT_IP=$(proxychains4 curl -s ifconfig.me 2>/dev/null)
+    echo "IP actual: $CURRENT_IP"
+    echo "$(date): Identidad TOR rotada - Nueva IP: $CURRENT_IP" >> $LOG_FILE
 }
 
 # Configurar Proxychains
 setup_proxychains() {
     echo "Configurando Proxychains..."
     PROXYCHAINS_CONF="/etc/proxychains4.conf"
-    if [ "$OS" == "macos" ]; then
-        PROXYCHAINS_CONF="/usr/local/etc/proxychains.conf"
-    fi
-
+    [ "$OS" == "macos" ] && PROXYCHAINS_CONF="/usr/local/etc/proxychains.conf"
     cat > $PROXYCHAINS_CONF << EOL
 strict_chain
 proxy_dns
@@ -79,10 +81,8 @@ tcp_read_time_out 15000
 tcp_connect_time_out 8000
 [ProxyList]
 socks5 127.0.0.1 9050
-socks5 192.168.1.100 1080
-http 45.32.123.45 8080
 EOL
-    echo "Proxychains configurado. Usa 'proxychains4 [comando]' para enrutar tráfico."
+    echo "Proxychains configurado."
     echo "$(date): Proxychains configurado" >> $LOG_FILE
 }
 
@@ -129,6 +129,8 @@ main_loop() {
 command -v tor >/dev/null 2>&1 || { echo "TOR no está instalado."; install_deps; }
 command -v macchanger >/dev/null 2>&1 || { echo "macchanger no está instalado."; install_deps; }
 command -v proxychains4 >/dev/null 2>&1 || { echo "Proxychains no está instalado."; install_deps; }
+command -v curl >/dev/null 2>&1 || { echo "curl no está instalado."; install_deps; }
+command -v nc >/dev/null 2>&1 || { echo "netcat no está instalado."; apt-get install -y netcat || brew install netcat; }
 
 # Detectar OS
 detect_os
@@ -139,6 +141,5 @@ setup_proxychains
 setup_anonymous_dns
 main_loop &
 
-# Mantener script activo
-echo "Script ejecutándose con anonimato y monitoreo. Log en $LOG_FILE. Usa Ctrl+C para detener."
+echo "Script ejecutándose. Log en $LOG_FILE. Usa Ctrl+C para detener."
 wait
