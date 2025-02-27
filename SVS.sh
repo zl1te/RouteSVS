@@ -19,6 +19,14 @@ fi
 INTERFACE=$1
 LOG_FILE="anonimato.log"
 
+# Validar que la interfaz existe
+if ! ifconfig $INTERFACE >/dev/null 2>&1; then
+    echo "Error: La interfaz $INTERFACE no existe."
+    echo "Interfaces disponibles:"
+    ifconfig -a | grep -oE '^[a-zA-Z0-9]+'
+    exit 1
+fi
+
 # Detectar sistema operativo
 detect_os() {
     if [[ "$OSTYPE" == "linux-gnu"* ]]; then
@@ -36,9 +44,9 @@ detect_os() {
 # Instalar dependencias
 install_deps() {
     if [ "$OS" == "linux" ]; then
-        apt-get update && apt-get install -y tor macchanger proxychains-ng curl
+        apt-get update && apt-get install -y tor macchanger proxychains-ng curl netcat
     elif [ "$OS" == "macos" ]; then
-        brew install tor macchanger proxychains-ng curl
+        brew install tor macchanger proxychains-ng curl netcat
     fi
 }
 
@@ -46,25 +54,28 @@ install_deps() {
 start_tor() {
     echo "Iniciando TOR con puerto de control..."
     if [ "$OS" == "linux" ] || [ "$OS" == "macos" ]; then
-        # Modificar torrc para habilitar puerto de control
         TORRC="/etc/tor/torrc"
         [ "$OS" == "macos" ] && TORRC="/usr/local/etc/tor/torrc"
         echo "ControlPort 9051" >> $TORRC
         echo "CookieAuthentication 0" >> $TORRC
         service tor restart || tor &
         sleep 5
+        if ! ps aux | grep -v grep | grep tor >/dev/null; then
+            echo "Error: TOR no se inició correctamente."
+            exit 1
+        fi
         echo "TOR iniciado."
     fi
     echo "$(date): TOR iniciado" >> $LOG_FILE
 }
 
-# Rotar identidad TOR usando puerto de control
+# Rotar identidad TOR
 rotate_tor() {
     echo "Rotando identidad TOR..."
     printf "AUTHENTICATE\r\nSIGNAL NEWNYM\r\nQUIT\r\n" | nc 127.0.0.1 9051
-    sleep 5 # Esperar a que el nuevo circuito se establezca
+    sleep 5
     echo "Nueva identidad TOR establecida."
-    CURRENT_IP=$(proxychains4 curl -s ifconfig.me 2>/dev/null)
+    CURRENT_IP=$(proxychains4 curl -s icanhazip.com 2>/dev/null || echo "No se pudo obtener IP")
     echo "IP actual: $CURRENT_IP"
     echo "$(date): Identidad TOR rotada - Nueva IP: $CURRENT_IP" >> $LOG_FILE
 }
@@ -130,7 +141,7 @@ command -v tor >/dev/null 2>&1 || { echo "TOR no está instalado."; install_deps
 command -v macchanger >/dev/null 2>&1 || { echo "macchanger no está instalado."; install_deps; }
 command -v proxychains4 >/dev/null 2>&1 || { echo "Proxychains no está instalado."; install_deps; }
 command -v curl >/dev/null 2>&1 || { echo "curl no está instalado."; install_deps; }
-command -v nc >/dev/null 2>&1 || { echo "netcat no está instalado."; apt-get install -y netcat || brew install netcat; }
+command -v nc >/dev/null 2>&1 || { echo "netcat no está instalado."; install_deps; }
 
 # Detectar OS
 detect_os
