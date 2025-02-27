@@ -12,14 +12,14 @@ fi
 # Verificar interfaz
 if [ -z "$1" ]; then
     echo "Uso: $0 [interfaz]"
-    echo "Ejemplo: $0 wlan0"
+    echo "Ejemplo: $0 eth0"
     exit 1
 fi
 
 INTERFACE=$1
 LOG_FILE="anonimato.log"
 
-# Validar que la interfaz existe
+# Validar interfaz
 if ! ifconfig $INTERFACE >/dev/null 2>&1; then
     echo "Error: La interfaz $INTERFACE no existe."
     echo "Interfaces disponibles:"
@@ -56,12 +56,19 @@ start_tor() {
     if [ "$OS" == "linux" ] || [ "$OS" == "macos" ]; then
         TORRC="/etc/tor/torrc"
         [ "$OS" == "macos" ] && TORRC="/usr/local/etc/tor/torrc"
-        echo "ControlPort 9051" >> $TORRC
-        echo "CookieAuthentication 0" >> $TORRC
-        service tor restart || tor &
+        # Asegurarse de que el puerto de control esté configurado
+        grep -q "ControlPort 9051" $TORRC || echo "ControlPort 9051" | tee -a $TORRC
+        grep -q "CookieAuthentication 0" $TORRC || echo "CookieAuthentication 0" | tee -a $TORRC
+        # Reiniciar TOR
+        service tor restart || (pkill tor && tor &)
         sleep 5
         if ! ps aux | grep -v grep | grep tor >/dev/null; then
             echo "Error: TOR no se inició correctamente."
+            exit 1
+        fi
+        # Verificar puerto de control
+        if ! nc -z 127.0.0.1 9051; then
+            echo "Error: Puerto de control 9051 no está abierto."
             exit 1
         fi
         echo "TOR iniciado."
@@ -72,12 +79,16 @@ start_tor() {
 # Rotar identidad TOR
 rotate_tor() {
     echo "Rotando identidad TOR..."
-    printf "AUTHENTICATE\r\nSIGNAL NEWNYM\r\nQUIT\r\n" | nc 127.0.0.1 9051
-    sleep 5
-    echo "Nueva identidad TOR establecida."
-    CURRENT_IP=$(proxychains4 curl -s icanhazip.com 2>/dev/null || echo "No se pudo obtener IP")
-    echo "IP actual: $CURRENT_IP"
-    echo "$(date): Identidad TOR rotada - Nueva IP: $CURRENT_IP" >> $LOG_FILE
+    if printf "AUTHENTICATE\r\nSIGNAL NEWNYM\r\nQUIT\r\n" | nc 127.0.0.1 9051 >/dev/null 2>&1; then
+        sleep 5
+        echo "Nueva identidad TOR establecida."
+        CURRENT_IP=$(proxychains4 curl -s icanhazip.com 2>/dev/null || echo "No se pudo obtener IP")
+        echo "IP actual: $CURRENT_IP"
+        echo "$(date): Identidad TOR rotada - Nueva IP: $CURRENT_IP" >> $LOG_FILE
+    else
+        echo "Error: No se pudo rotar la identidad de TOR."
+        echo "$(date): Error al rotar identidad TOR" >> $LOG_FILE
+    fi
 }
 
 # Configurar Proxychains
